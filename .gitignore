@@ -1,4 +1,5 @@
-/app.exe
-SatelliteOrbit.exe
-main.cpp
-/main.exe
+/build/
+*.exe
+*.dll
+*.o
+*.obj
