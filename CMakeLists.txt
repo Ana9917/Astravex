@@ -1,0 +1,29 @@
+cmake_minimum_required(VERSION 3.21)
+project(SatelliteOrbitSimulator LANGUAGES CXX)
+
+find_package(SDL3 3.2 CONFIG REQUIRED)
+
+add_executable(SatelliteOrbit
+    Engine.cpp
+    functions.cpp
+    shapes.cpp
+)
+
+target_compile_features(SatelliteOrbit PRIVATE cxx_std_17)
+target_link_libraries(SatelliteOrbit PRIVATE SDL3::SDL3)
+
+if(WIN32 AND TARGET SDL3::SDL3-shared)
+    add_custom_command(TARGET SatelliteOrbit POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "$<TARGET_FILE:SDL3::SDL3-shared>"
+            "$<TARGET_FILE_DIR:SatelliteOrbit>"
+        VERBATIM
+    )
+endif()
+
+add_custom_target(run
+    COMMAND "$<TARGET_FILE:SatelliteOrbit>"
+    DEPENDS SatelliteOrbit
+    USES_TERMINAL
+    VERBATIM
+)
