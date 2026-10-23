@@ -5,6 +5,10 @@
 #include <vector>
 #define M_PI 3.14159265358979323846
 using namespace std;
+///r represents the latitude ring 
+///s represents the position around that ring
+///rings controls how many bands the sphere has
+///segments controls how many points there are around each ring
 ///box is centered at (0, 0, 0), used half dimensions
 Mesh makeBox(double halfW, double halfH, double halfD) {
     Mesh m;
@@ -48,6 +52,24 @@ Mesh makeLatLongSphere(double radius, int rings, int segments) {
         for (int s = 0; s < segments; s++)
         //connect each vertex to the matching vertex on the next ring
             m.edges.push_back({base + s, next + s});
+    }
+    for(int r = 0; r < rings; r++)
+    {
+        ///current stores the index of the first vertex on the current ring
+        int current = r * segments;
+        int next = (r+1) * segments;
+        for(int s = 0; s < segments; s++)
+        {
+            //nextS is the following segment
+            int nextS = (s+1) % segments;
+            //indices of four neighbouring vertices
+            int a = current + s;
+            int b = next + s;
+            int c = current + nextS;
+            int d = next + nextS; 
+            m.triangles.push_back({a, b, c});
+            m.triangles.push_back({c, b, d});
+        }
     }
     return m;
 }
