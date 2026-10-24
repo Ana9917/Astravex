@@ -13,8 +13,8 @@
 #define M_PI 3.14159265358979323846
 using namespace std;
 
-constexpr int kScreenWidth = 1000;
-constexpr int kScreenHeight = 750;
+int kScreenWidth = 1000;
+int kScreenHeight = 750;
 
 void applyYaw(satellite &s, double yaw) // Rotation on the y axis
 {
@@ -28,6 +28,49 @@ void applyPitch(satellite &s, double pitch) // Rotation on the x axis
     double old_y = s.pos_y, old_z = s.pos_z;
     s.pos_y = old_y * cos(pitch) - old_z * sin(pitch);
     s.pos_z = old_y * sin(pitch) + old_z * cos(pitch);
+}
+
+Vertex3 orientSatellite(Vertex3 vertex, const satellite &s)
+{
+    // Direction away from Earth's centre
+    double r = sqrt(s.pos_x * s.pos_x +
+                    s.pos_y * s.pos_y +
+                    s.pos_z * s.pos_z);
+
+    if (r == 0.0)
+        return vertex;
+
+    double upX = s.pos_x / r;
+    double upY = s.pos_y / r;
+    double upZ = s.pos_z / r;
+
+    // Direction of travel, perpendicular to the radial direction
+    double radialSpeed = s.vel_x * upX +
+                         s.vel_y * upY +
+                         s.vel_z * upZ;
+
+    double tx = s.vel_x - radialSpeed * upX;
+    double ty = s.vel_y - radialSpeed * upY;
+    double tz = s.vel_z - radialSpeed * upZ;
+
+    double t = sqrt(tx * tx + ty * ty + tz * tz);
+
+    if (t < 0.000001)
+        return vertex;
+
+    tx /= t;
+    ty /= t;
+    tz /= t;
+
+    // Third direction, perpendicular to the first two
+    double zx = ty * upZ - tz * upY;
+    double zy = tz * upX - tx * upZ;
+    double zz = tx * upY - ty * upX;
+
+    return {
+        vertex.x * tx + vertex.y * upX + vertex.z * zx,
+        vertex.x * ty + vertex.y * upY + vertex.z * zy,
+        vertex.x * tz + vertex.y * upZ + vertex.z * zz};
 }
 bool hiddenByEarth(const satellite &point, double camera_z)
 {
@@ -55,14 +98,21 @@ bool hiddenByEarth(const satellite &point, double camera_z)
 void drawMesh(SDL_Renderer *renderer, const Mesh &mesh,
               Vertex3 position, double modelScale,
               double yaw, double pitch,
-              double camera_z, double focal_length, bool hideback = true)
+              double camera_z, double focal_length,
+              bool hideback = true, bool fillPanels = false,
+              const satellite *orientation = nullptr)
 {
     vector<SDL_FPoint> projected(mesh.vertices.size());
     vector<bool> visible(mesh.vertices.size(), false);
 
     for (size_t i = 0; i < mesh.vertices.size(); ++i)
     {
-        const Vertex3 &vertex = mesh.vertices[i];
+        Vertex3 vertex = mesh.vertices[i];
+
+        if (orientation != nullptr)
+        {
+            vertex = orientSatellite(vertex, *orientation);
+        }
 
         // Convert a model vertex into a position
         satellite point{};
@@ -83,13 +133,76 @@ void drawMesh(SDL_Renderer *renderer, const Mesh &mesh,
         visible[i] = !hideback || !hiddenByEarth(point, camera_z);
     }
 
-    for (const auto &edge : mesh.edges)
+    if (fillPanels && !mesh.triangles.empty())
     {
-        int a = edge.first;
-        int b = edge.second;
+        vector<SDL_Vertex> panelVertices(mesh.vertices.size());
 
+        for (int i = 0; i < mesh.vertices.size(); i++)
+        {
+            panelVertices[i].position = projected[i];
+
+            if (i < 8)
+            {
+                // Gold satellite body
+                panelVertices[i].color = {0.65f, 0.50f, 0.18f, 1.0f};
+            }
+            else
+            {
+                // Dark-blue solar panels
+                panelVertices[i].color = {0.03f, 0.12f, 0.40f, 1.0f};
+            }
+
+            panelVertices[i].tex_coord = {0.0f, 0.0f};
+        }
+
+        vector<int> panelIndices;
+        for (int i = 0; i < mesh.triangles.size(); i++)
+        {
+            int a = mesh.triangles[i][0];
+            int b = mesh.triangles[i][1];
+            int c = mesh.triangles[i][2];
+
+            if (visible[a] && visible[b] && visible[c])
+            {
+                panelIndices.push_back(a);
+                panelIndices.push_back(b);
+                panelIndices.push_back(c);
+            }
+        }
+
+        if (!panelIndices.empty())
+        {
+            SDL_RenderGeometry(renderer, nullptr,
+                               panelVertices.data(), (int)panelVertices.size(),
+                               panelIndices.data(), (int)panelIndices.size());
+        }
+    }
+    for (int i = 0; i < mesh.edges.size(); i++)
+    {
+        int a = mesh.edges[i].first;
+        int b = mesh.edges[i].second;
         if (visible[a] && visible[b])
         {
+            if (fillPanels)
+            {
+                int antennaStart = (int)mesh.vertices.size() - 4;
+
+                if (a >= antennaStart && b >= antennaStart)
+                {
+                    // Silver antenna
+                    SDL_SetRenderDrawColor(renderer, 220, 230, 240, 255);
+                }
+                else if (a < 8 && b < 8)
+                {
+                    // Light-gold body edges
+                    SDL_SetRenderDrawColor(renderer, 230, 195, 120, 255);
+                }
+                else
+                {
+                    // Blue-grey solar panel grid
+                    SDL_SetRenderDrawColor(renderer, 140, 175, 215, 255);
+                }
+            }
             SDL_RenderLine(renderer,
                            projected[a].x, projected[a].y,
                            projected[b].x, projected[b].y);
@@ -100,7 +213,17 @@ void drawMesh(SDL_Renderer *renderer, const Mesh &mesh,
 void drawFilledEarth(SDL_Renderer *renderer, const Mesh &mesh,
                      double yaw, double pitch, double camera_z, double focal_length)
 {
+    // Direction from Earth towards the Sun
+    const double lightX = -0.5;
+    const double lightY = 0.4;
+    const double lightZ = -0.75;
+    const double lightLength = sqrt(
+        lightX * lightX +
+        lightY * lightY +
+        lightZ * lightZ);
     vector<SDL_Vertex> vertices(mesh.vertices.size());
+    // store the rotated triangles so that they don't get shaded
+    vector<satellite> awaypoints(mesh.vertices.size());
     // convert each 3d vertex into a 2d sdl vertex
     for (size_t i = 0; i < mesh.vertices.size(); i++)
     {
@@ -110,22 +233,80 @@ void drawFilledEarth(SDL_Renderer *renderer, const Mesh &mesh,
         point.pos_z = mesh.vertices[i].z;
         applyYaw(point, yaw);
         applyPitch(point, pitch);
+        awaypoints[i] = point;
+        // Surface normal: direction pointing outwards from Earth
+        double nx = point.pos_x;
+        double ny = point.pos_y;
+        double nz = point.pos_z;
+
+        double normalLength = sqrt(nx * nx + ny * ny + nz * nz);
+
+        nx /= normalLength;
+        ny /= normalLength;
+        nz /= normalLength;
+
+        // Dot product: how directly the surface faces the light
+        double diffuse = (nx * lightX +
+                          ny * lightY +
+                          nz * lightZ) /
+                         lightLength;
+
+        diffuse = fmax(0.0, diffuse);
+
+        // keep dark side slightly visible
+        double brightness = 0.12 + 0.88 * diffuse;
         double view_z = point.pos_z - camera_z;
         if (view_z <= 1.0)
             return;
         vertices[i].position = {
             static_cast<float>(kScreenWidth / 2.0 + point.pos_x / view_z * focal_length),
             static_cast<float>(kScreenHeight / 2.0 - point.pos_y / view_z * focal_length)};
-        vertices[i].color = {0.05f, 0.35f, 0.85f, 1.0f};
+        vertices[i].color = {
+            static_cast<float>(0.05 * brightness),
+            static_cast<float>(0.35 * brightness),
+            static_cast<float>(0.85 * brightness),
+            1.0f};
     }
     // build the list of triangle indices
     vector<int> indices;
 
     for (int i = 0; i < mesh.triangles.size(); i++)
     {
-        indices.push_back(mesh.triangles[i][0]);
-        indices.push_back(mesh.triangles[i][1]);
-        indices.push_back(mesh.triangles[i][2]);
+        int a = mesh.triangles[i][0]; // first vertex of i triangle
+        int b = mesh.triangles[i][1]; // 2nd vertex of i triangle
+        int c = mesh.triangles[i][2]; // 3rd vertex of i triangle
+        // find centre of triangle in 3D
+        double cx = (awaypoints[a].pos_x +
+                     awaypoints[b].pos_x +
+                     awaypoints[c].pos_x) /
+                    3.0;
+
+        double cy = (awaypoints[a].pos_y +
+                     awaypoints[b].pos_y +
+                     awaypoints[c].pos_y) /
+                    3.0;
+
+        double cz = (awaypoints[a].pos_z +
+                     awaypoints[b].pos_z +
+                     awaypoints[c].pos_z) /
+                    3.0;
+        // Direction from the triangle towards the camera
+        double tocameraX = -cx;
+        double tocameraY = -cy;
+        double tocameraZ = camera_z - cz;
+
+        // check if facing
+        double facing = cx * tocameraX +
+                        cy * tocameraY +
+                        cz * tocameraZ;
+
+        // Only draw triangles facing the camera
+        if (facing > 0.0)
+        {
+            indices.push_back(a);
+            indices.push_back(b);
+            indices.push_back(c);
+        }
     }
 
     SDL_RenderGeometry(
@@ -169,7 +350,7 @@ int main()
         return 1;
     }
 
-    SDL_Window *window = SDL_CreateWindow("Simple SDL Window", kScreenWidth, kScreenHeight, SDL_WINDOW_RESIZABLE); /// Create a window with the specified title, width, height and flags
+    SDL_Window *window = SDL_CreateWindow("Astravex", kScreenWidth, kScreenHeight, SDL_WINDOW_RESIZABLE); /// Create a window with the specified title, width, height and flags
     if (!window)
     {
         cout << "The window could not be created" << SDL_GetError() << endl;
@@ -194,6 +375,7 @@ int main()
     ImGui_ImplSDLRenderer3_Init(renderer);
     ImGuiIO &io = ImGui::GetIO();
     ImFont *mainfont = io.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/segoeui.ttf", 19.0f);
+    ImFont *overlayfont = io.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/consola.ttf", 16.0f);
     ImGuiStyle &style = ImGui::GetStyle();
     style.WindowRounding = 8.0f;
     style.FrameRounding = 5.0f;
@@ -234,6 +416,8 @@ int main()
     Uint64 previousTime = SDL_GetTicksNS(); // SDL_GetTicksNS measures elapsed time in nanoseconds
     while (running)                         // Main loop that checks for events such as the user closing the window
     {
+        // adapt to current renderer size
+        SDL_GetRenderOutputSize(renderer, &kScreenWidth, &kScreenHeight);
         ImGui_ImplSDLRenderer3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
@@ -288,8 +472,33 @@ int main()
             double view_starz = stars[i].z - camera_z;
             double screen_starsx = kScreenWidth / 2.0 + (stars[i].x / view_starz) * focal_length;
             double screen_starsy = kScreenHeight / 2.0 - (stars[i].y / view_starz) * focal_length;
-            SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255); /// Draw the stars
-            SDL_RenderPoint(renderer, screen_starsx, screen_starsy);
+            int brightness = 170;
+            float starSize = 2;
+            if (i % 25 == 0)
+            {
+                brightness = 255;
+                starSize = 5;
+            }
+
+            else if (i % 5 == 0)
+            {
+                brightness = 220;
+                starSize = 3;
+            }
+            SDL_SetRenderDrawColor(renderer, brightness, brightness, brightness, 255);
+            SDL_SetRenderDrawColor(renderer, brightness, brightness, brightness, 255);
+
+            // first loop is the horizontal position, x
+            for (int x = 0; x < starSize; x++)
+            {
+                // second loop is the verical pos, y
+                for (int y = 0; y < starSize; y++)
+                {
+                    SDL_RenderPoint(renderer,
+                                    screen_starsx + x - starSize / 2, // keep star approx centred
+                                    screen_starsy + y - starSize / 2);
+                }
+            }
         }
         SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
 
@@ -323,7 +532,8 @@ int main()
             drawMesh(renderer, satelliteMesh,
                      {v[i].pos_x, v[i].pos_y, v[i].pos_z},
                      200000.0,
-                     yaw, pitch, camera_z, focal_length);
+                     yaw, pitch, camera_z, focal_length,
+                     true, true, &v[i]);
             for (size_t j = 0; j + 1 < trail[i].size(); ++j)
             {
                 /// If there are more satellites than colours, reasign the pattern of colours
@@ -382,30 +592,35 @@ int main()
             ImGui::Text("Velocity: %.2f km/s", speedKmS);
         }
         ImGui::End();
-        //Bg info
+        // Bg info
         ImGuiWindowFlags overlayFlags =
-            ImGuiWindowFlags_NoDecoration | //remove title bar
-            ImGuiWindowFlags_NoBackground | //transparent bg
-            ImGuiWindowFlags_NoMove | //info in one positon
-            ImGuiWindowFlags_NoInputs | //lets mouse pass through the sim
-            ImGuiWindowFlags_AlwaysAutoResize | //fits the overlay around the text
-            ImGuiWindowFlags_NoSavedSettings; //prevents storing the overlay's window settings
+            ImGuiWindowFlags_NoDecoration |     // remove title bar
+            ImGuiWindowFlags_NoBackground |     // transparent bg
+            ImGuiWindowFlags_NoMove |           // info in one positon
+            ImGuiWindowFlags_NoInputs |         // lets mouse pass through the sim
+            ImGuiWindowFlags_AlwaysAutoResize | // fits the overlay around the text
+            ImGuiWindowFlags_NoSavedSettings;   // prevents storing the overlay's window settings
 
         ImGui::SetNextWindowPos(
             ImVec2(20, 20),
             ImGuiCond_Always);
 
         ImGui::Begin("Simulation Overlay", nullptr, overlayFlags);
-
+        if (overlayfont != nullptr)
+        {
+            ImGui::PushFont(overlayfont);
+        }
         ImGui::Text("SIMULATION STATUS");
         ImGui::Separator();
 
         ImGui::Text("Status: %s", paused ? "Paused" : "Running");
         ImGui::Text("Simulation time: %.1f min", simulatedTime / 60.0);
         ImGui::Text("Satellites: %d", n);
-        ImGui::Text("View: %s",
-                    focusMode ? "Focus Mode" : "All Satellites");
-
+        ImGui::Text("View: %s", focusMode ? "Focus Mode" : "All Satellites");
+        if (overlayfont != nullptr)
+        {
+            ImGui::PopFont();
+        }
         ImGui::End();
         ImGui::Render();
         ImGui_ImplSDLRenderer3_RenderDrawData(
