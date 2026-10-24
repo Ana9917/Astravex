@@ -8,6 +8,22 @@ add_executable(SatelliteOrbit
     functions.cpp
     shapes.cpp
 )
+# Dear ImGui source files
+target_sources(SatelliteOrbit PRIVATE
+    third_party/imgui/imgui.cpp
+    third_party/imgui/imgui_draw.cpp
+    third_party/imgui/imgui_widgets.cpp
+    third_party/imgui/imgui_tables.cpp
+    third_party/imgui/imgui_demo.cpp
+
+    third_party/imgui/backends/imgui_impl_sdl3.cpp
+    third_party/imgui/backends/imgui_impl_sdlrenderer3.cpp
+)
+
+target_include_directories(SatelliteOrbit PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui/backends"
+)
 
 target_compile_features(SatelliteOrbit PRIVATE cxx_std_17)
 target_link_libraries(SatelliteOrbit PRIVATE SDL3::SDL3)

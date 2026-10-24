@@ -1,4 +1,7 @@
 #include <SDL3/SDL.h>
+#include "imgui.h"
+#include "imgui_impl_sdl3.h"
+#include "imgui_impl_sdlrenderer3.h"
 #include <iostream>
 #include <vector>
 #include <random>
@@ -131,63 +134,6 @@ void drawFilledEarth(SDL_Renderer *renderer, const Mesh &mesh,
         indices.data(), static_cast<int>(indices.size()));
 }
 
-void drawSatelliteInfo(SDL_Renderer *renderer, const satellite &s, double simulatedTime, int satelliteIndex) /// implement HUD elements
-{
-    const double earthRadius = 6371000.0;
-
-    double r = sqrt(
-        s.pos_x * s.pos_x +
-        s.pos_y * s.pos_y +
-        s.pos_z * s.pos_z);
-
-    double speed = sqrt(
-        s.vel_x * s.vel_x +
-        s.vel_y * s.vel_y +
-        s.vel_z * s.vel_z);
-
-    double altitudeKm = (r - earthRadius) / 1000.0;
-    double speedKmS = speed / 1000.0;
-
-    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-
-    SDL_RenderDebugTextFormat(
-        renderer, 20, 20,
-        "SATELLITE %d", satelliteIndex + 1);
-
-    SDL_RenderDebugTextFormat(
-        renderer, 20, 40,
-        "Altitude: %.1f km", altitudeKm);
-
-    SDL_RenderDebugTextFormat(
-        renderer, 20, 55,
-        "Speed: %.2f km/s", speedKmS);
-    const double GM = 3.986e14;
-    /// Keplerian orbit: T = 2pi * sqrt(pow(a, 3) / GM)
-    ///  calculate semi-major axis from the satellite's specific orbital energy
-    if (r > 0.0)
-    {
-        double energy = speed * speed / 2.0 - GM / r;
-
-        if (energy < 0.0)
-        {
-            double a = -GM / (2.0 * energy);
-            double period = 2.0 * M_PI * sqrt(a * a * a / GM);
-
-            SDL_RenderDebugTextFormat(
-                renderer, 20, 70,
-                "Orbital period: %.1f min", period / 60.0);
-        }
-        else
-        {
-            SDL_RenderDebugText(renderer, 20, 70,
-                                "Orbital period: N/A");
-        }
-    }
-    SDL_RenderDebugTextFormat(
-        renderer, 20, 85,
-        "Simulation time: %.1f min", simulatedTime / 60.0);
-}
-
 int main()
 {
     int n; /// Create a satellite
@@ -238,6 +184,29 @@ int main()
         return 1;
     }
 
+    // Initialise Dear ImGui
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    // set theme
+    ImGui::StyleColorsDark();
+    // connect to SDL3
+    ImGui_ImplSDL3_InitForSDLRenderer(window, renderer);
+    ImGui_ImplSDLRenderer3_Init(renderer);
+    ImGuiIO &io = ImGui::GetIO();
+    ImFont *mainfont = io.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/segoeui.ttf", 19.0f);
+    ImGuiStyle &style = ImGui::GetStyle();
+    style.WindowRounding = 8.0f;
+    style.FrameRounding = 5.0f;
+    style.WindowPadding = ImVec2(16, 14);
+    style.ItemSpacing = ImVec2(10, 10);
+    if (mainfont != nullptr)
+    {
+        io.FontDefault = mainfont;
+    }
+    else
+    {
+        cout << "Could not load Segoe UI font!" << endl;
+    }
     bool running = true, paused = false;
     int selectedSatellite = 0;
     bool focusMode = false; // satellite focus mode
@@ -265,8 +234,10 @@ int main()
     Uint64 previousTime = SDL_GetTicksNS(); // SDL_GetTicksNS measures elapsed time in nanoseconds
     while (running)                         // Main loop that checks for events such as the user closing the window
     {
+        ImGui_ImplSDLRenderer3_NewFrame();
+        ImGui_ImplSDL3_NewFrame();
+        ImGui::NewFrame();
         Uint64 currentTime = SDL_GetTicksNS();
-
         double frameTime = (currentTime - previousTime) / 1e9;
         previousTime = currentTime;
         if (frameTime > 0.25)
@@ -296,6 +267,11 @@ int main()
         {
             accumulator = 0.0;
         }
+        // Calculate Earth's rotation based on simulation time
+        const double earthRotationPeriod = 86164.0;
+        earthYaw = fmod(
+            2.0 * M_PI * simulatedTime / earthRotationPeriod,
+            2.0 * M_PI);
         const bool *state = SDL_GetKeyboardState(NULL);
         if (state[SDL_SCANCODE_LEFT])
             yaw += 0.02;
@@ -319,20 +295,20 @@ int main()
 
         SDL_SetRenderDrawColor(renderer, 0, 100, 255, 255);
 
-        // EarthMode = 0
+        // EarthMode solid+wireframe
         if (earthMode != 0)
         {
-            drawFilledEarth(renderer, earthMesh,
-                            yaw, pitch, camera_z, focal_length);
+            drawFilledEarth(renderer, earthMesh, yaw + earthYaw,
+                            pitch, camera_z, focal_length);
         }
-        // EarthMode = 1
+        // EarthMode solid
         if (earthMode != 2)
         {
             SDL_SetRenderDrawColor(renderer, 100, 180, 255, 255);
 
             drawMesh(renderer, earthMesh,
                      {0.0, 0.0, 0.0}, 1.0,
-                     yaw, pitch, camera_z, focal_length,
+                     yaw + earthYaw, pitch, camera_z, focal_length,
                      earthMode != 0);
         }
 
@@ -373,33 +349,86 @@ int main()
                 SDL_RenderLine(renderer, screen_tx, screen_ty, screen_tx2, screen_ty2);
             }
         }
+
+        ImGui::SetNextWindowPos(ImVec2(20, 120), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(340, 220), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowBgAlpha(0.88f);
+
+        ImGui::Begin("Satellite Information");
+
         if (n > 0)
         {
-            drawSatelliteInfo(renderer,
-                              v[selectedSatellite],
-                              simulatedTime,
-                              selectedSatellite);
+            const satellite &s = v[selectedSatellite];
+
+            const double earthRadius = 6371000.0;
+
+            double r = sqrt(
+                s.pos_x * s.pos_x +
+                s.pos_y * s.pos_y +
+                s.pos_z * s.pos_z);
+
+            double speed = sqrt(
+                s.vel_x * s.vel_x +
+                s.vel_y * s.vel_y +
+                s.vel_z * s.vel_z);
+
+            double altitudeKm = (r - earthRadius) / 1000.0;
+            double speedKmS = speed / 1000.0;
+
+            ImGui::Text("Satellite %d", selectedSatellite + 1);
+            ImGui::Separator();
+
+            ImGui::Text("Altitude: %.1f km", altitudeKm);
+            ImGui::Text("Velocity: %.2f km/s", speedKmS);
         }
-        if (focusMode)
-        {
-            SDL_RenderDebugText(renderer, 20, 105, "VIEW: FOCUS MODE");
-        }
-        else
-        {
-            SDL_RenderDebugText(renderer, 20, 105, "VIEW: ALL SATELLITES");
-        }
-        SDL_RenderPresent(renderer); /// Show the render
+        ImGui::End();
+        //Bg info
+        ImGuiWindowFlags overlayFlags =
+            ImGuiWindowFlags_NoDecoration | //remove title bar
+            ImGuiWindowFlags_NoBackground | //transparent bg
+            ImGuiWindowFlags_NoMove | //info in one positon
+            ImGuiWindowFlags_NoInputs | //lets mouse pass through the sim
+            ImGuiWindowFlags_AlwaysAutoResize | //fits the overlay around the text
+            ImGuiWindowFlags_NoSavedSettings; //prevents storing the overlay's window settings
+
+        ImGui::SetNextWindowPos(
+            ImVec2(20, 20),
+            ImGuiCond_Always);
+
+        ImGui::Begin("Simulation Overlay", nullptr, overlayFlags);
+
+        ImGui::Text("SIMULATION STATUS");
+        ImGui::Separator();
+
+        ImGui::Text("Status: %s", paused ? "Paused" : "Running");
+        ImGui::Text("Simulation time: %.1f min", simulatedTime / 60.0);
+        ImGui::Text("Satellites: %d", n);
+        ImGui::Text("View: %s",
+                    focusMode ? "Focus Mode" : "All Satellites");
+
+        ImGui::End();
+        ImGui::Render();
+        ImGui_ImplSDLRenderer3_RenderDrawData(
+            ImGui::GetDrawData(), renderer);
+        SDL_RenderPresent(renderer); /// show renderer
+
         while (SDL_PollEvent(&event))
         {
+            ImGui_ImplSDL3_ProcessEvent(&event);
             if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
                 event.button.button == SDL_BUTTON_LEFT)
-                dragging = true;
+            {
+                if (!ImGui::GetIO().WantCaptureMouse)
+                    dragging = true;
+                else
+                    dragging = false;
+            }
 
             if (event.type == SDL_EVENT_MOUSE_BUTTON_UP &&
                 event.button.button == SDL_BUTTON_LEFT)
                 dragging = false;
 
-            if (event.type == SDL_EVENT_MOUSE_MOTION && dragging)
+            if (event.type == SDL_EVENT_MOUSE_MOTION && dragging && !ImGui::GetIO().WantCaptureMouse)
             {
                 yaw += event.motion.xrel * mouseSensitivity;
                 pitch += event.motion.yrel * mouseSensitivity;
@@ -415,7 +444,7 @@ int main()
 
             if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST)
                 dragging = false;
-            if (event.type == SDL_EVENT_MOUSE_WHEEL)
+            if (event.type == SDL_EVENT_MOUSE_WHEEL && !ImGui::GetIO().WantCaptureMouse)
             {
                 double scroll = event.wheel.y;
 
@@ -467,6 +496,9 @@ int main()
                 running = false;
         }
     }
+    ImGui_ImplSDLRenderer3_Shutdown();
+    ImGui_ImplSDL3_Shutdown();
+    ImGui::DestroyContext();
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window); /// Cleans up resources by destroying the window and quitting SDL
     SDL_Quit();
