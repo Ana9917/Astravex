@@ -3,6 +3,9 @@
 **Astravex** is an interactive 3D satellite orbit simulator developed in **C++17**, using **SDL3** for rendering and **Dear ImGui** for its graphical interface.
 
 The application simulates satellite motion around Earth using Newtonian gravitational physics and numerical integration. Users can create satellites, experiment with different orbital trajectories, and visualize how their orbits evolve over time.
+## Preview
+
+![Astravex Satellite Orbit Simulator](screenshots/Astravex_preview.png)
 
 ## Features
 
