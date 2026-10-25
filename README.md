@@ -10,21 +10,21 @@ The application simulates satellite motion around Earth using Newtonian gravitat
 ## Features
 
 ### Orbital Simulation
-Simulates satellite motion under Earth's gravitational attraction.
-Uses the Velocity Verlet numerical integration method.
-Supports multiple satellites in the same simulation.
-Visualizes satellite trajectories with colored orbital trails.
-Supports circular, elliptical, polar, inclined, and escape trajectories.
+- Simulates satellite motion under Earth's gravitational attraction.
+- Uses the Velocity Verlet numerical integration method.
+- Supports multiple satellites in the same simulation.
+- Visualizes satellite trajectories with colored orbital trails.
+- Supports circular, elliptical, polar, inclined, and escape trajectories.
 
 ### Interactive Controls
-Create new simulations with custom initial conditions.
-Add satellites to an existing simulation.
-Choose from predefined orbit presets.
-Pause, resume, and restart simulations.
-Adjust simulation speed.
-Rotate and zoom the 3D camera.
-Switch between Earth rendering modes.
-Focus on individual satellites.
+- Create new simulations with custom initial conditions.
+- Add satellites to an existing simulation.
+- Choose from predefined orbit presets.
+- Pause, resume, and restart simulations.
+- Adjust simulation speed.
+- Rotate and zoom the 3D camera.
+- Switch between Earth rendering modes.
+- Focus on individual satellites.
 
 ### Satellite Information
 
