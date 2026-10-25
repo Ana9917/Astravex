@@ -3,10 +3,13 @@ project(SatelliteOrbitSimulator LANGUAGES CXX)
 
 find_package(SDL3 3.2 CONFIG REQUIRED)
 
-add_executable(SatelliteOrbit
+add_executable(SatelliteOrbit WIN32
     Engine.cpp
     functions.cpp
     shapes.cpp
+)
+set_target_properties(SatelliteOrbit PROPERTIES
+    OUTPUT_NAME "Astravex"
 )
 # Dear ImGui source files
 target_sources(SatelliteOrbit PRIVATE
@@ -38,8 +41,7 @@ if(WIN32 AND TARGET SDL3::SDL3-shared)
 endif()
 
 add_custom_target(run
-    COMMAND "$<TARGET_FILE:SatelliteOrbit>"
+    COMMAND $<TARGET_FILE:SatelliteOrbit>
     DEPENDS SatelliteOrbit
-    USES_TERMINAL
-    VERBATIM
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )

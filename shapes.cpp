@@ -47,43 +47,44 @@ Mesh makeLatLongSphere(double radius, int rings, int segments)
     {
         // calculate the angle of current ring
         double phi = -M_PI / 2 + M_PI * r / (rings == 0 ? 1 : rings);
-        for (int s = 0; s < segments; s++)
+        for (int s = 0; s <= segments; s++)
         {
             double theta = 2 * M_PI * s / segments;
             m.vertices.push_back({radius * cos(phi) * cos(theta),
                                   radius * sin(phi),
                                   radius * cos(phi) * sin(theta)});
+            float u = (float)s / segments;
+            float v = 1.0f - (float)r / rings;
+            m.uvs.push_back({u, v});
         }
     }
     for (int r = 0; r <= rings; r++)
     {
         // calculate the angle around the sphere, 2*PI is one full rotation
-        int base = r * segments;
+        int base = r * (segments + 1);
         for (int s = 0; s < segments; s++)
-            m.edges.push_back({base + s, base + (s + 1) % segments});
+            m.edges.push_back({base + s, base + s + 1});
     }
     for (int r = 0; r < rings; r++)
     {
         // finds the starting vertex of the current ring and the next ring
-        int base = r * segments, next = (r + 1) * segments;
-        for (int s = 0; s < segments; s++)
+        int base = r * (segments + 1);
+        int next = (r + 1) * (segments + 1);
+        for (int s = 0; s <= segments; s++)
             // connect each vertex to the matching vertex on the next ring
             m.edges.push_back({base + s, next + s});
     }
     for (int r = 0; r < rings; r++)
     {
         /// current stores the index of the first vertex on the current ring
-        int current = r * segments;
-        int next = (r + 1) * segments;
+        int current = r * (segments + 1);
+        int next = (r + 1) * (segments + 1);
         for (int s = 0; s < segments; s++)
         {
-            // nextS is the following segment
-            int nextS = (s + 1) % segments;
-            // indices of four neighbouring vertices
             int a = current + s;
             int b = next + s;
-            int c = current + nextS;
-            int d = next + nextS;
+            int c = current + s + 1;
+            int d = next + s + 1;
             m.triangles.push_back({a, b, c});
             m.triangles.push_back({c, b, d});
         }

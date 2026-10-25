@@ -1,8 +1,12 @@
 #include <SDL3/SDL.h>
+#include <SDL3/SDL_dialog.h>
+#include <string>
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 #include "imgui_impl_sdlrenderer3.h"
 #include <iostream>
+#include <iomanip>
+#include <fstream>
 #include <vector>
 #include <random>
 #include <cmath>
@@ -144,7 +148,10 @@ void drawMesh(SDL_Renderer *renderer, const Mesh &mesh,
             if (i < 8)
             {
                 // Gold satellite body
-                panelVertices[i].color = {0.65f, 0.50f, 0.18f, 1.0f};
+                if (mesh.vertices[i].y > 0)
+                    panelVertices[i].color = {0.85f, 0.68f, 0.25f, 1.0f};
+                else
+                    panelVertices[i].color = {0.40f, 0.30f, 0.10f, 1.0f};
             }
             else
             {
@@ -211,7 +218,7 @@ void drawMesh(SDL_Renderer *renderer, const Mesh &mesh,
 }
 
 void drawFilledEarth(SDL_Renderer *renderer, const Mesh &mesh,
-                     double yaw, double pitch, double camera_z, double focal_length)
+                     double yaw, double pitch, double camera_z, double focal_length, SDL_Texture *earthTexture)
 {
     // Direction from Earth towards the Sun
     const double lightX = -0.5;
@@ -261,10 +268,14 @@ void drawFilledEarth(SDL_Renderer *renderer, const Mesh &mesh,
         vertices[i].position = {
             static_cast<float>(kScreenWidth / 2.0 + point.pos_x / view_z * focal_length),
             static_cast<float>(kScreenHeight / 2.0 - point.pos_y / view_z * focal_length)};
+        // mesh.uvs[i][0] is U, and mesh.uvs[i][1] is V
+        vertices[i].tex_coord = {
+            mesh.uvs[i][0],
+            mesh.uvs[i][1]};
         vertices[i].color = {
-            static_cast<float>(0.05 * brightness),
-            static_cast<float>(0.35 * brightness),
-            static_cast<float>(0.85 * brightness),
+            (float)brightness,
+            (float)brightness,
+            (float)brightness,
             1.0f};
     }
     // build the list of triangle indices
@@ -310,21 +321,88 @@ void drawFilledEarth(SDL_Renderer *renderer, const Mesh &mesh,
     }
 
     SDL_RenderGeometry(
-        renderer, nullptr,
-        vertices.data(), static_cast<int>(vertices.size()),
-        indices.data(), static_cast<int>(indices.size()));
+        renderer, earthTexture,
+        vertices.data(), (int)vertices.size(),
+        indices.data(), (int)indices.size());
+}
+
+bool saveSim(const vector<satellite> &v, double dt, const string &filename)
+{
+    ofstream file(filename);
+
+    if (!file)
+        return false;
+
+    file << v.size() << '\n';
+    file << setprecision(17) << dt << '\n';
+
+    for (int i = 0; i < v.size(); i++)
+    {
+        file << v[i].pos_x << " "
+             << v[i].pos_y << " "
+             << v[i].pos_z << " "
+             << v[i].vel_x << " "
+             << v[i].vel_y << " "
+             << v[i].vel_z << '\n';
+    }
+
+    return static_cast<bool>(file);
+}
+
+bool loadSim(vector<satellite> &v, double &dt, const string &filename)
+{
+    ifstream file(filename);
+    if (!file)
+        return false;
+    int n;
+    double loadedDT;
+    if (!(file >> n >> loadedDT) || n <= 0 || n > 10000 || loadedDT <= 0)
+        return 0;
+    vector<satellite> loaded(n);
+
+    for (int i = 0; i < n; i++)
+    {
+        if (!(file >> loaded[i].pos_x >> loaded[i].pos_y >> loaded[i].pos_z >> loaded[i].vel_x >> loaded[i].vel_y >> loaded[i].vel_z))
+        {
+            return false;
+        }
+    }
+    // replaces the satellite vector with the loaded satellites
+    v = loaded;
+    // updates the time step
+    dt = loadedDT;
+    return true;
+}
+
+string filename = "simulation.txt";
+
+Uint32 openFileEvent = 0;
+
+void SDLCALL onFileSelected(void *userdata,
+                            const char *const *files,
+                            int filter)
+{
+    if (!files || !files[0])
+        return;
+
+    SDL_Event event{};
+    event.type = openFileEvent;
+    event.user.data1 = SDL_strdup(files[0]);
+
+    if (!SDL_PushEvent(&event))
+        SDL_free(event.user.data1);
 }
 
 int main()
 {
-    int n; /// Create a satellite
-    double dt, yaw = 0.0, pitch = 0.0;
-    cout << "No. of satellites ";
-    cin >> n;
-    cout << "Delta time ";
-    cin >> dt;
+    double dt = 10.0, yaw = 0.0, pitch = 0.0;
+    vector<satellite> v(1);
+    v[0].pos_x = 6771000.0;
+    v[0].vel_z = -7672.6;
+    init(v[0]);
+    int n = (int)v.size();
     vector<deque<satellite>> trail(n);
-    vector<satellite> v(n);
+    vector<satellite> initialSatellites = v;
     vector<star> stars(1000);
     mt19937 gen(42); /// Number generator
     uniform_real_distribution<double> dist(-1e11, 1e11);
@@ -335,11 +413,9 @@ int main()
         stars[i].y = dist(gen);
         stars[i].z = dist(gen);
     }
-    for (int i = 0; i < n; i++)
-        cin >> v[i].pos_x >> v[i].pos_y >> v[i].pos_z >> v[i].vel_x >> v[i].vel_y >> v[i].vel_z;
+
     double r = sqrt(v[0].pos_x * v[0].pos_x + v[0].pos_y * v[0].pos_y + v[0].pos_z * v[0].pos_z);
-    for (int i = 0; i < n; i++)
-        init(v[i]);
+
     double scale = 640.0 / 16000000.0; /// Adapt scale
     const double camera_z = -20000000.0;
     double focal_length = 400.0;
@@ -347,6 +423,14 @@ int main()
     if (SDL_Init(SDL_INIT_VIDEO) < 0) /// Check if SDL initialisation was successful and prints an error message if it was not
     {
         cout << "SDL could not initialise!" << SDL_GetError() << endl;
+        return 1;
+    }
+
+    openFileEvent = SDL_RegisterEvents(1);
+
+    if (openFileEvent == 0)
+    {
+        cout << "Could not register file event!\n";
         return 1;
     }
 
@@ -363,6 +447,19 @@ int main()
         cout << "The renderer could not be created" << SDL_GetError() << endl;
         SDL_Quit();
         return 1;
+    }
+    SDL_Surface *earthSurface = SDL_LoadBMP("assets/earth_noClouds.0330.bmp");
+
+    SDL_Texture *earthTexture = nullptr;
+
+    if (earthSurface != nullptr)
+    {
+        earthTexture = SDL_CreateTextureFromSurface(renderer, earthSurface);
+        SDL_DestroySurface(earthSurface);
+    }
+    else
+    {
+        cout << "Could not load Earth texture: " << SDL_GetError() << endl;
     }
 
     // Initialise Dear ImGui
@@ -390,14 +487,26 @@ int main()
         cout << "Could not load Segoe UI font!" << endl;
     }
     bool running = true, paused = false;
+    bool showShortcuts = true;     // for the shortcuts window
+    bool showSatelliteInfo = true; // for the info window
+    bool showAbout = false;        // for about window
     int selectedSatellite = 0;
+    bool showNewSimulation = false;
+    bool showAddSatellite = false;
+    satellite addedSatellite{};
+    addedSatellite.pos_z = -6771000.0;
+    addedSatellite.vel_y = 7672.6;
+    satellite newSatellite{};
+    newSatellite.pos_x = 6771000.0;
+    newSatellite.vel_z = -7672.6;
+    double newDt = 10.0;
     bool focusMode = false; // satellite focus mode
-    int earthMode = 1;      // 0 wireframe + solid, 1 solid only, 2 wireframe only
+    int earthMode = 2;      // 0 wireframe + solid, 1 solid only, 2 wireframe only
     SDL_Event event;
     constexpr double GM = 3.986e14;
     double T = 2 * M_PI * sqrt((r * r * r) / GM);          /// Calculte orbital period
-    int steps = (int)(T / dt);                             /// No. of steps in one orbital period
-    Mesh earthMesh = makeLatLongSphere(6371000.0, 24, 48); /// create the meshes
+    int steps = (int)(3 * T / dt);                         /// No. of steps in one orbital period
+    Mesh earthMesh = makeLatLongSphere(6371000.0, 30, 60); /// create the meshes with 30 paralells, 60 meridians
     Mesh satelliteMesh = makeSatelliteModel();
     const SDL_Color trailColours[] = {
         {255, 80, 80, 255},  // red
@@ -412,6 +521,7 @@ int main()
     double earthYaw = 0.0;
     const double physicsInterval = 1.0 / 60.0; /// 60 physics updates per real second
     double accumulator = 0.0;                  /// Stores how much real time has passed but hasn't been processed yet
+    double speedMultiplier = 1.0;
     double simulatedTime = 0.0;
     Uint64 previousTime = SDL_GetTicksNS(); // SDL_GetTicksNS measures elapsed time in nanoseconds
     while (running)                         // Main loop that checks for events such as the user closing the window
@@ -428,7 +538,7 @@ int main()
             frameTime = 0.25;
         if (!paused)
         {
-            accumulator += frameTime;
+            accumulator += frameTime * speedMultiplier;
 
             while (accumulator >= physicsInterval)
             {
@@ -508,7 +618,7 @@ int main()
         if (earthMode != 0)
         {
             drawFilledEarth(renderer, earthMesh, yaw + earthYaw,
-                            pitch, camera_z, focal_length);
+                            pitch, camera_z, focal_length, earthTexture);
         }
         // EarthMode solid
         if (earthMode != 2)
@@ -561,37 +671,120 @@ int main()
         }
 
         ImGui::SetNextWindowPos(ImVec2(20, 120), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(340, 220), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(360, 340), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowBgAlpha(0.88f);
 
-        ImGui::Begin("Satellite Information");
-
-        if (n > 0)
+        if (showSatelliteInfo)
         {
-            const satellite &s = v[selectedSatellite];
+            ImGui::Begin("Satellite Information", &showSatelliteInfo);
 
-            const double earthRadius = 6371000.0;
+            if (n > 0)
+            {
+                const satellite &s = v[selectedSatellite];
 
-            double r = sqrt(
-                s.pos_x * s.pos_x +
-                s.pos_y * s.pos_y +
-                s.pos_z * s.pos_z);
+                const double earthRadius = 6371000.0;
 
-            double speed = sqrt(
-                s.vel_x * s.vel_x +
-                s.vel_y * s.vel_y +
-                s.vel_z * s.vel_z);
+                double r = sqrt(
+                    s.pos_x * s.pos_x +
+                    s.pos_y * s.pos_y +
+                    s.pos_z * s.pos_z);
 
-            double altitudeKm = (r - earthRadius) / 1000.0;
-            double speedKmS = speed / 1000.0;
+                double speed = sqrt(
+                    s.vel_x * s.vel_x +
+                    s.vel_y * s.vel_y +
+                    s.vel_z * s.vel_z);
 
-            ImGui::Text("Satellite %d", selectedSatellite + 1);
-            ImGui::Separator();
+                double altitudeKm = (r - earthRadius) / 1000.0;
+                double speedKmS = speed / 1000.0;
 
-            ImGui::Text("Altitude: %.1f km", altitudeKm);
-            ImGui::Text("Velocity: %.2f km/s", speedKmS);
+                // calculate orbital period using Kepler's 3rd law
+                const double GM = 3.986e14;
+
+                double energy = speed * speed / 2.0 - GM / r;
+                double period = 0.0;
+
+                // Angular momentum
+                double hx = s.pos_y * s.vel_z - s.pos_z * s.vel_y;
+                double hy = s.pos_z * s.vel_x - s.pos_x * s.vel_z;
+                double hz = s.pos_x * s.vel_y - s.pos_y * s.vel_x;
+
+                double hSquared = hx * hx + hy * hy + hz * hz;
+
+                // Orbital inclination
+                double inclination = 0.0;
+
+                if (hSquared > 0.0)
+                {
+                    double h = sqrt(hSquared);
+
+                    double cosInclination = hy / h;
+
+                    cosInclination = fmax(-1.0, fmin(1.0, cosInclination));
+
+                    inclination = acos(cosInclination) * 180.0 / M_PI;
+                }
+                // Orbital eccentricity
+                double eccentricity = sqrt(
+                    fmax(0.0, 1.0 + 2.0 * energy * hSquared / (GM * GM)));
+
+                SDL_Color c = trailColours[selectedSatellite % trailColourCount];
+                ImVec4 colour(c.r / 255.0f, c.g / 255.0f, c.b / 255.0f, 1.0f);
+                ImGui::TextColored(colour, "●");
+                ImGui::SameLine();
+                ImGui::Text("Satellite %d", selectedSatellite + 1);
+                ImGui::Spacing();
+
+                ImGui::SeparatorText("Current State");
+                ImGui::Text("Altitude: %.1f km", altitudeKm);
+                ImGui::Text("Velocity: %.2f km/s", speedKmS);
+
+                ImGui::Spacing();
+                ImGui::SeparatorText("Orbital Elements");
+
+                if (energy < 0.0)
+                {
+                    double a = -GM / (2.0 * energy);
+                    period = 2.0 * M_PI * sqrt(a * a * a / GM);
+
+                    double perigeeKm = (a * (1.0 - eccentricity) - earthRadius) / 1000.0;
+                    double apogeeKm = (a * (1.0 + eccentricity) - earthRadius) / 1000.0;
+
+                    ImGui::Text("Orbital Period: %.1f min", period / 60.0);
+                    ImGui::Text("Perigee: %.1f km", perigeeKm);
+                    ImGui::Text("Apogee: %.1f km", apogeeKm);
+                }
+                else
+                {
+                    ImGui::Text("Orbital Period: N/A");
+                    ImGui::Text("Perigee: N/A");
+                    ImGui::Text("Apogee: N/A");
+                }
+
+                ImGui::Text("Eccentricity: %.4f", eccentricity);
+                if (hSquared > 0.0)
+                {
+                    ImGui::Text("Inclination: %.1f deg", inclination);
+                }
+                else
+                {
+                    ImGui::Text("Inclination: N/A");
+                }
+                if (eccentricity < 0.01)
+                {
+                    ImGui::Text("Orbit: Nearly Circular");
+                }
+                else if (eccentricity < 1.0)
+                {
+                    ImGui::Text("Orbit: Elliptical");
+                }
+                else
+                {
+                    ImGui::Text("Orbit: Escape Trajectory");
+                }
+            }
+            ImGui::End();
         }
-        ImGui::End();
+
         // Bg info
         ImGuiWindowFlags overlayFlags =
             ImGuiWindowFlags_NoDecoration |     // remove title bar
@@ -615,6 +808,8 @@ int main()
 
         ImGui::Text("Status: %s", paused ? "Paused" : "Running");
         ImGui::Text("Simulation time: %.1f min", simulatedTime / 60.0);
+        ImGui::Text("Simulation speed: %.0fx", dt * speedMultiplier / physicsInterval);
+        ImGui::Text("FPS: %.0f", ImGui::GetIO().Framerate);
         ImGui::Text("Satellites: %d", n);
         ImGui::Text("View: %s", focusMode ? "Focus Mode" : "All Satellites");
         if (overlayfont != nullptr)
@@ -622,6 +817,360 @@ int main()
             ImGui::PopFont();
         }
         ImGui::End();
+        if (showShortcuts)
+        {
+            ImGui::SetNextWindowSize(ImVec2(350, 0), ImGuiCond_FirstUseEver);
+
+            ImGui::Begin("Keyboard Shortcuts", &showShortcuts);
+
+            ImGui::SeparatorText("Simulation");
+
+            ImGui::Text("Space       Pause / Resume");
+            ImGui::Text("I           Show / Hide Satellite Information");
+            ImGui::Text("N / B       Next / Previous satellite");
+            ImGui::Text("V           Toggle focus mode");
+            ImGui::Text("G           Change Earth mode");
+
+            ImGui::Spacing();
+            ImGui::SeparatorText("Camera");
+
+            ImGui::Text("Arrow keys  Rotate camera");
+            ImGui::Text("C           Reset camera");
+            ImGui::Text("Mouse drag     Rotate view");
+            ImGui::Text("Mouse wheel    Zoom");
+
+            ImGui::Spacing();
+            ImGui::SeparatorText("Other");
+
+            ImGui::Text("H           Show / Hide shortcuts");
+
+            ImGui::End();
+        }
+        if (ImGui::BeginMainMenuBar())
+        {
+            if (ImGui::BeginMenu("File"))
+            {
+                if (ImGui::MenuItem("New Simulation"))
+                    showNewSimulation = true;
+                if (ImGui::MenuItem("Add Satellite..."))
+                    showAddSatellite = true;
+
+                if (ImGui::MenuItem("Open Simulation..."))
+                {
+                    SDL_ShowOpenFileDialog(
+                        onFileSelected,
+                        nullptr,
+                        window,
+                        nullptr,
+                        0,
+                        nullptr,
+                        false);
+                }
+
+                if (ImGui::MenuItem("Save Simulation"))
+                {
+                    if (saveSim(v, dt, filename))
+                        cout << "Simulation saved successfully!\n";
+                    else
+                        cout << "Could not save simulation!\n";
+                }
+
+                ImGui::MenuItem("Save As...");
+                ImGui::Separator();
+
+                if (ImGui::MenuItem("Exit"))
+                    running = false;
+
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Simulation"))
+            {
+                if (ImGui::MenuItem(paused ? "Resume" : "Pause", "Space"))
+                {
+                    paused = !paused;
+                }
+                if (ImGui::MenuItem("Restart Simulation"))
+                {
+                    v = initialSatellites;
+
+                    trail.clear();
+                    trail.resize(n);
+
+                    selectedSatellite = 0;
+                    simulatedTime = 0.0;
+                    accumulator = 0.0;
+                    earthYaw = 0.0;
+                    paused = false;
+                }
+                if (ImGui::BeginMenu("Simulation Speed"))
+                {
+                    if (ImGui::MenuItem("0.5x", nullptr, speedMultiplier == 0.5))
+                        speedMultiplier = 0.5;
+
+                    if (ImGui::MenuItem("1x", nullptr, speedMultiplier == 1.0))
+                        speedMultiplier = 1.0;
+
+                    if (ImGui::MenuItem("2x", nullptr, speedMultiplier == 2.0))
+                        speedMultiplier = 2.0;
+
+                    if (ImGui::MenuItem("5x", nullptr, speedMultiplier == 5.0))
+                        speedMultiplier = 5.0;
+
+                    if (ImGui::MenuItem("10x", nullptr, speedMultiplier == 10.0))
+                        speedMultiplier = 10.0;
+
+                    ImGui::EndMenu();
+                }
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("View"))
+            {
+                ImGui::MenuItem("Satellite Information", "I", &showSatelliteInfo);
+                ImGui::MenuItem("Focus Mode", "V", &focusMode);
+
+                ImGui::Separator();
+
+                if (ImGui::BeginMenu("Earth Mode"))
+                {
+                    if (ImGui::MenuItem("Solid", nullptr, earthMode == 2))
+                        earthMode = 2;
+
+                    if (ImGui::MenuItem("Solid + Wireframe", nullptr, earthMode == 1))
+                        earthMode = 1;
+
+                    if (ImGui::MenuItem("Wireframe", nullptr, earthMode == 0))
+                        earthMode = 0;
+
+                    ImGui::EndMenu();
+                }
+
+                ImGui::Separator();
+
+                if (ImGui::MenuItem("Reset Camera", "C"))
+                {
+                    yaw = 0.0;
+                    pitch = 0.0;
+                }
+
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Help"))
+            {
+                ImGui::MenuItem("Keyboard Shortcuts", "H", &showShortcuts);
+                ImGui::MenuItem("About Astravex", nullptr, &showAbout);
+                ImGui::EndMenu();
+            }
+            ImGui::EndMainMenuBar();
+        }
+        if (showAbout)
+        {
+            ImGui::Begin("About Astravex", &showAbout,
+                         ImGuiWindowFlags_AlwaysAutoResize);
+
+            ImGui::Text("Astravex");
+            ImGui::Text("Satellite Orbit Simulator");
+            ImGui::Separator();
+            ImGui::Text("Built with C++17, SDL3 and Dear ImGui.");
+
+            ImGui::Spacing();
+            ImGui::TextWrapped(
+                "A 3D satellite orbit simulator that models "
+                "orbital motion around Earth using Newtonian gravity.");
+
+            ImGui::End();
+        }
+        if (showNewSimulation)
+        {
+            ImGui::Begin("New Simulation", &showNewSimulation,
+                         ImGuiWindowFlags_AlwaysAutoResize);
+
+            if (ImGui::BeginCombo("Orbit Preset", "Choose an orbit"))
+            {
+                if (ImGui::Selectable("Circular Orbit"))
+                {
+                    newSatellite = {};
+                    newSatellite.pos_x = 6771000.0;
+                    newSatellite.vel_z = -7672.6;
+                }
+
+                if (ImGui::Selectable("Elliptical Orbit"))
+                {
+                    newSatellite = {};
+                    newSatellite.pos_x = 6771000.0;
+                    newSatellite.vel_z = -8500.0;
+                }
+
+                if (ImGui::Selectable("Polar Orbit"))
+                {
+                    newSatellite = {};
+                    newSatellite.pos_x = 6771000.0;
+                    newSatellite.vel_y = 7672.6;
+                }
+
+                if (ImGui::Selectable("Inclined Orbit (45 deg)"))
+                {
+                    newSatellite = {};
+                    newSatellite.pos_x = 6771000.0;
+                    newSatellite.vel_y = 5425.35;
+                    newSatellite.vel_z = -5425.35;
+                }
+
+                ImGui::EndCombo();
+            }
+            ImGui::SeparatorText("Initial Position (metres)");
+
+            ImGui::InputDouble("X", &newSatellite.pos_x);
+            ImGui::InputDouble("Y", &newSatellite.pos_y);
+            ImGui::InputDouble("Z", &newSatellite.pos_z);
+
+            ImGui::SeparatorText("Initial Velocity (m/s)");
+
+            ImGui::InputDouble("VX", &newSatellite.vel_x);
+            ImGui::InputDouble("VY", &newSatellite.vel_y);
+            ImGui::InputDouble("VZ", &newSatellite.vel_z);
+
+            ImGui::SeparatorText("Simulation Settings");
+
+            ImGui::InputDouble("Time Step", &newDt);
+
+            ImGui::Spacing();
+
+            if (ImGui::Button("Create Simulation"))
+            {
+                double radius = sqrt(
+                    newSatellite.pos_x * newSatellite.pos_x +
+                    newSatellite.pos_y * newSatellite.pos_y +
+                    newSatellite.pos_z * newSatellite.pos_z);
+
+                double speed = sqrt(
+                    newSatellite.vel_x * newSatellite.vel_x +
+                    newSatellite.vel_y * newSatellite.vel_y +
+                    newSatellite.vel_z * newSatellite.vel_z);
+
+                if (newDt > 0.0 && isfinite(newDt) &&
+                    isfinite(radius) && radius > 6371000.0 &&
+                    isfinite(speed))
+                {
+                    v.assign(1, newSatellite);
+                    init(v[0]);
+
+                    n = 1;
+                    dt = newDt;
+                    initialSatellites = v;
+
+                    trail.clear();
+                    trail.resize(n);
+
+                    selectedSatellite = 0;
+                    simulatedTime = 0.0;
+                    accumulator = 0.0;
+                    earthYaw = 0.0;
+                    paused = false;
+
+                    double energy = speed * speed / 2.0 - GM / radius;
+
+                    if (energy < 0.0)
+                    {
+                        double a = -GM / (2.0 * energy);
+                        double period = 2.0 * M_PI * sqrt(a * a * a / GM);
+
+                        steps = (int)(1.1 * period / dt) + 1;
+                    }
+                    else
+                    {
+                        steps = 10000;
+                    }
+
+                    showNewSimulation = false;
+                }
+            }
+
+            ImGui::End();
+        }
+        if (showAddSatellite)
+        {
+            ImGui::Begin("Add Satellite", &showAddSatellite,
+                         ImGuiWindowFlags_AlwaysAutoResize);
+
+                // Orbit presets
+                if (ImGui::BeginCombo("Orbit Preset", "Choose an orbit"))
+                {
+                    if (ImGui::Selectable("Circular Orbit"))
+                    {
+                        addedSatellite = {};
+                        addedSatellite.pos_x = 6771000.0;
+                        addedSatellite.vel_z = -7672.6;
+                    }
+
+                    if (ImGui::Selectable("Elliptical Orbit"))
+                    {
+                        addedSatellite = {};
+                        addedSatellite.pos_x = 6771000.0;
+                        addedSatellite.vel_z = -8500.0;
+                    }
+
+                    if (ImGui::Selectable("Polar Orbit"))
+                    {
+                        addedSatellite = {};
+                        addedSatellite.pos_x = 6771000.0;
+                        addedSatellite.vel_y = 7672.6;
+                    }
+
+                    if (ImGui::Selectable("Inclined Orbit (45 deg)"))
+                    {
+                        addedSatellite = {};
+                        addedSatellite.pos_x = 6771000.0;
+                        addedSatellite.vel_y = 5425.35;
+                        addedSatellite.vel_z = -5425.35;
+                    }
+
+                    ImGui::EndCombo();
+                }
+            
+            ImGui::SeparatorText("Initial Position (metres)");
+
+            ImGui::InputDouble("X", &addedSatellite.pos_x);
+            ImGui::InputDouble("Y", &addedSatellite.pos_y);
+            ImGui::InputDouble("Z", &addedSatellite.pos_z);
+
+            ImGui::SeparatorText("Initial Velocity (m/s)");
+
+            ImGui::InputDouble("VX", &addedSatellite.vel_x);
+            ImGui::InputDouble("VY", &addedSatellite.vel_y);
+            ImGui::InputDouble("VZ", &addedSatellite.vel_z);
+
+            ImGui::Spacing();
+            if (ImGui::Button("Add Satellite"))
+            {
+                double radius = sqrt(
+                    addedSatellite.pos_x * addedSatellite.pos_x +
+                    addedSatellite.pos_y * addedSatellite.pos_y +
+                    addedSatellite.pos_z * addedSatellite.pos_z);
+
+                double speed = sqrt(
+                    addedSatellite.vel_x * addedSatellite.vel_x +
+                    addedSatellite.vel_y * addedSatellite.vel_y +
+                    addedSatellite.vel_z * addedSatellite.vel_z);
+
+                if (isfinite(radius) && radius > 6371000.0 &&
+                    isfinite(speed))
+                {
+                    v.push_back(addedSatellite);
+                    init(v.back());
+
+                    trail.emplace_back();
+
+                    n = (int)v.size();
+                    selectedSatellite = n - 1;
+
+                    initialSatellites.push_back(v.back());
+
+                    showAddSatellite = false;
+                }
+            }
+
+            ImGui::End();
+        }
         ImGui::Render();
         ImGui_ImplSDLRenderer3_RenderDrawData(
             ImGui::GetDrawData(), renderer);
@@ -630,6 +1179,57 @@ int main()
         while (SDL_PollEvent(&event))
         {
             ImGui_ImplSDL3_ProcessEvent(&event);
+            if (event.type == openFileEvent)
+            {
+                string path = static_cast<char *>(event.user.data1);
+                SDL_free(event.user.data1);
+
+                if (loadSim(v, dt, path))
+                {
+                    filename = path;
+                    n = (int)v.size();
+
+                    for (int i = 0; i < n; i++)
+                        init(v[i]);
+
+                    initialSatellites = v;
+                    trail.clear();
+                    trail.resize(n);
+
+                    selectedSatellite = 0;
+                    simulatedTime = 0.0;
+                    accumulator = 0.0;
+                    paused = false;
+
+                    // Recalculate the trail length
+                    double r = sqrt(v[0].pos_x * v[0].pos_x +
+                                    v[0].pos_y * v[0].pos_y +
+                                    v[0].pos_z * v[0].pos_z);
+
+                    double speed = sqrt(v[0].vel_x * v[0].vel_x +
+                                        v[0].vel_y * v[0].vel_y +
+                                        v[0].vel_z * v[0].vel_z);
+
+                    double energy = speed * speed / 2.0 - GM / r;
+
+                    if (energy < 0.0)
+                    {
+                        double a = -GM / (2.0 * energy);
+                        double T = 2.0 * M_PI * sqrt(a * a * a / GM);
+                        steps = (int)(1.1 * T / dt) + 1;
+                    }
+                    else
+                    {
+                        steps = 10000;
+                    }
+
+                    cout << "Simulation loaded successfully!\n";
+                }
+                else
+                {
+                    cout << "Could not load simulation!\n";
+                }
+            }
             if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
                 event.button.button == SDL_BUTTON_LEFT)
             {
@@ -678,7 +1278,7 @@ int main()
             if (event.type == SDL_EVENT_KEY_DOWN && event.key.scancode == SDL_SCANCODE_SPACE)
                 paused = !paused;
             if (event.type == SDL_EVENT_KEY_DOWN && event.key.scancode == SDL_SCANCODE_G && !event.key.repeat)
-                earthMode = (earthMode + 1) % 3;
+                earthMode = (earthMode + 2) % 3;
             if (event.type == SDL_EVENT_KEY_DOWN &&
                 event.key.scancode == SDL_SCANCODE_C &&
                 !event.key.repeat)
@@ -707,6 +1307,20 @@ int main()
                 focusMode = !focusMode;
             }
 
+            if (event.type == SDL_EVENT_KEY_DOWN &&
+                event.key.scancode == SDL_SCANCODE_H &&
+                !event.key.repeat)
+            {
+                showShortcuts = !showShortcuts;
+            }
+
+            if (event.type == SDL_EVENT_KEY_DOWN &&
+                event.key.scancode == SDL_SCANCODE_I &&
+                !event.key.repeat)
+            {
+                showSatelliteInfo = !showSatelliteInfo;
+            }
+
             if (event.type == SDL_EVENT_QUIT)
                 running = false;
         }
@@ -714,6 +1328,7 @@ int main()
     ImGui_ImplSDLRenderer3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
+    SDL_DestroyTexture(earthTexture);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window); /// Cleans up resources by destroying the window and quitting SDL
     SDL_Quit();

@@ -1,5 +1,6 @@
-/build/
+build/
+build-release/
+dist/
 *.exe
-*.dll
-*.o
-*.obj
+imgui.ini
+simulation.txt
